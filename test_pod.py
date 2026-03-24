@@ -21,4 +21,7 @@ resp = requests.post(
 )
 
 print(f"Status: {resp.status_code}")
-print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
+try:
+    print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
+except Exception:
+    print(resp.text)
