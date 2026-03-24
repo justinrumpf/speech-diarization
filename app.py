@@ -195,32 +195,14 @@ def _assign_speakers_to_segments_no_words(transcript_segments, diarization):
     return turns
 
 
-@app.route("/transcribe", methods=["POST"])
-def transcribe():
-    """
-    POST JSON with either:
-      {"url": "https://example.com/audio.mp3"}
-    or:
-      {"file_path": "/path/to/local/file.mp3"}
-
-    Optional params:
-      - num_speakers: int (hint for diarization)
-      - min_speakers: int
-      - max_speakers: int
-      - language: str (e.g. "en", auto-detected if omitted)
-      - beam_size: int (default 5)
-
-    Returns JSON with diarized transcript.
-    """
-    data = request.get_json(force=True)
+def process_single(data: dict) -> dict:
+    """Process a single audio item. Returns a result dict."""
     temp_file = None
-
     try:
         audio_path, is_temp = resolve_audio_path(data)
         if is_temp:
             temp_file = audio_path
 
-        # --- Transcribe with faster-whisper ---
         model = get_whisper_model()
         segments_gen, info = model.transcribe(
             audio_path,
@@ -229,7 +211,6 @@ def transcribe():
             vad_filter=True,
             language=data.get("language"),
         )
-        # Materialize segments (triggers actual transcription)
         segments = list(segments_gen)
 
         logger.info(
@@ -237,7 +218,6 @@ def transcribe():
             info.language, info.language_probability, info.duration,
         )
 
-        # --- Diarize with pyannote ---
         diarization_pipeline = get_diarization_pipeline()
         diarize_kwargs = {}
         if "num_speakers" in data:
@@ -252,35 +232,87 @@ def transcribe():
             {"waveform": waveform, "sample_rate": sample_rate},
             **diarize_kwargs,
         )
-        # Newer pyannote wraps result in DiarizeOutput; extract the annotation
         if hasattr(diarize_output, "speaker_diarization"):
             diarization = diarize_output.speaker_diarization
         else:
             diarization = diarize_output
 
-        # --- Merge transcription + diarization ---
         turns = assign_speakers_to_segments(segments, diarization)
 
-        return jsonify({
+        return {
             "language": info.language,
             "language_probability": round(info.language_probability, 4),
             "duration": round(info.duration, 3),
             "num_speakers": len({t["speaker"] for t in turns}),
             "turns": turns,
-        })
+        }
+    finally:
+        if temp_file and os.path.exists(temp_file):
+            os.unlink(temp_file)
 
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    """
+    POST JSON with either:
+      {"url": "https://example.com/audio.mp3"}
+      {"base64": "<base64-encoded audio>", "format": "mp3"}
+      {"file_path": "/path/to/local/file.mp3"}
+
+    Optional params:
+      - id: str (unique identifier, returned in response)
+      - num_speakers, min_speakers, max_speakers: int
+      - language: str (e.g. "en", auto-detected if omitted)
+      - beam_size: int (default 5)
+    """
+    data = request.get_json(force=True)
+    try:
+        result = process_single(data)
+        if "id" in data:
+            result["id"] = data["id"]
+        return jsonify(result)
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 500
     except Exception as e:
         logger.exception("Transcription failed")
         return jsonify({"error": str(e)}), 500
-    finally:
-        if temp_file and os.path.exists(temp_file):
-            os.unlink(temp_file)
+
+
+@app.route("/transcribe/batch", methods=["POST"])
+def transcribe_batch():
+    """
+    POST JSON:
+      {
+        "items": [
+          {"id": "call-001", "url": "https://example.com/a.mp3"},
+          {"id": "call-002", "base64": "<b64>", "format": "mp3"},
+          ...
+        ]
+      }
+
+    Each item requires an "id" field plus an audio source (url, base64, or file_path).
+    Returns {"results": [...]} where each entry has the id and transcription or error.
+    """
+    data = request.get_json(force=True)
+    items = data.get("items")
+    if not items or not isinstance(items, list):
+        return jsonify({"error": "Request must include 'items' array"}), 400
+
+    results = []
+    for item in items:
+        item_id = item.get("id", "unknown")
+        logger.info("Processing batch item: %s", item_id)
+        try:
+            result = process_single(item)
+            result["id"] = item_id
+            results.append(result)
+        except Exception as e:
+            logger.exception("Failed to process item %s", item_id)
+            results.append({"id": item_id, "error": str(e)})
+
+    return jsonify({"results": results})
 
 
 @app.route("/health", methods=["GET"])
