@@ -1,6 +1,7 @@
 import os
 import tempfile
 import logging
+import base64
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -89,13 +90,21 @@ def resolve_audio_path(data: dict) -> str:
     """Resolve the audio source from the request. Returns a local file path and whether it's temporary."""
     if "url" in data:
         return download_audio(data["url"]), True
+    elif "base64" in data:
+        suffix = data.get("format", ".mp3")
+        if not suffix.startswith("."):
+            suffix = "." + suffix
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp.write(base64.b64decode(data["base64"]))
+        tmp.close()
+        return tmp.name, True
     elif "file_path" in data:
         path = data["file_path"]
         if not os.path.isfile(path):
             raise FileNotFoundError(f"File not found: {path}")
         return path, False
     else:
-        raise ValueError("Request must include 'url' or 'file_path'")
+        raise ValueError("Request must include 'url', 'base64', or 'file_path'")
 
 
 def assign_speakers_to_segments(transcript_segments, diarization):
