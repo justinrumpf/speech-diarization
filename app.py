@@ -51,7 +51,7 @@ def get_diarization_pipeline():
         logger.info("Loading pyannote diarization pipeline")
         _diarization_pipeline = DiarizationPipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            token=HF_TOKEN,
+            use_auth_token=HF_TOKEN,
         )
         if DEVICE == "cuda":
             _diarization_pipeline.to(torch.device("cuda"))
