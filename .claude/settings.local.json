@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(python -c \"from pyannote.audio import Pipeline; help\\(Pipeline\\)\")",
+      "Bash(python -c \"from pyannote.audio.pipelines import SpeakerDiarization; import inspect; print\\(inspect.getsource\\(SpeakerDiarization.apply\\)\\)\")"
+    ]
+  }
+}
